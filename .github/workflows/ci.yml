@@ -30,7 +30,8 @@ jobs:
         run: ruff check src tests app.py scripts
 
       - name: Run Unit Tests
-        run: pytest -q
+        run: python -m pytest -v
+
 
   train-and-evaluate:
     name: Train, Evaluate & MLflow Tracking
