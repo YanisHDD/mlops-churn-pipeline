@@ -2,10 +2,11 @@
 Unit tests for the FastAPI microservice endpoints.
 """
 
-from fastapi.testclient import TestClient
-from app import app, CustomerInput
 from unittest.mock import MagicMock
+from fastapi.testclient import TestClient
 import numpy as np
+
+from app import app
 
 
 client = TestClient(app)

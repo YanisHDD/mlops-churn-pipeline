@@ -3,9 +3,9 @@ FastAPI Microservice for Telco Customer Churn Real-Time Prediction.
 """
 
 import os
+from typing import Optional
 import joblib
 import pandas as pd
-from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -104,8 +104,8 @@ def predict(customer: CustomerInput):
             churn_probability=round(prob, 4),
             risk_level=risk
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}")
+    except (ValueError, KeyError, TypeError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=f"Prediction error: {e!s}") from e
 
 
 if __name__ == "__main__":

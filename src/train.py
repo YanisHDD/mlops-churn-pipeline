@@ -2,18 +2,23 @@
 Model training script with scikit-learn Pipeline, GridSearchCV, and MLflow tracking.
 """
 
-import os
 import argparse
+import os
 import joblib
-import pandas as pd
-from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score
 import mlflow
 import mlflow.sklearn
 from mlflow.models.signature import infer_signature
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
 
-from src.utils import load_config, load_and_preprocess_data
 from src.pipeline import build_pipeline
+from src.utils import load_and_preprocess_data, load_config
 
 
 def train(config_path: str = "configs/config.yaml"):

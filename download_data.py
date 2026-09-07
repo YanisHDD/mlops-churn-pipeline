@@ -21,7 +21,7 @@ def download_dataset(config_path: str = "configs/config.yaml"):
                 cfg = yaml.safe_load(f)
                 url = cfg.get("data", {}).get("raw_url", DEFAULT_URL)
                 dest = cfg.get("data", {}).get("csv_path", DEFAULT_DEST)
-        except Exception:
+        except (ImportError, OSError, KeyError):
             pass
 
     os.makedirs(os.path.dirname(dest), exist_ok=True)

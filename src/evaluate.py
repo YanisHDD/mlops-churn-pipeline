@@ -2,19 +2,26 @@
 Evaluation script to assess model performance and log graphical artifacts to MLflow.
 """
 
-import os
-import json
 import argparse
+import json
+import os
 import joblib
+import mlflow
 import pandas as pd
 from sklearn.metrics import (
-    roc_auc_score, accuracy_score, f1_score, precision_score, recall_score,
-    classification_report
+    accuracy_score,
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
-import mlflow
 
 from src.utils import (
-    load_config, plot_confusion_matrix, plot_roc_curve, plot_precision_recall_curve
+    load_config,
+    plot_confusion_matrix,
+    plot_precision_recall_curve,
+    plot_roc_curve,
 )
 
 

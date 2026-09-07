@@ -2,9 +2,10 @@
 Unit tests for the scikit-learn Pipeline and preprocessing ColumnTransformer.
 """
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from src.pipeline import build_pipeline
 
 

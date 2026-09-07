@@ -2,18 +2,17 @@
 Machine Learning Pipeline definition with ColumnTransformer and Classifier.
 """
 
-from typing import List
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 def build_pipeline(
-    numeric_features: List[str],
-    categorical_features: List[str],
+    numeric_features: list[str],
+    categorical_features: list[str],
     model_type: str = "logistic_regression"
 ) -> Pipeline:
     """

@@ -3,17 +3,23 @@ Utility functions for data loading, preprocessing, config handling, and plotting
 """
 
 import os
-from typing import Dict, Tuple, Any
-import pandas as pd
-import numpy as np
+from typing import Any
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve, average_precision_score
+from sklearn.metrics import (
+    auc,
+    average_precision_score,
+    confusion_matrix,
+    precision_recall_curve,
+    roc_curve,
+)
 
 
-def load_config(config_path: str = "configs/config.yaml") -> Dict[str, Any]:
+def load_config(config_path: str = "configs/config.yaml") -> dict[str, Any]:
     """Load configuration from YAML file."""
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -21,14 +27,14 @@ def load_config(config_path: str = "configs/config.yaml") -> Dict[str, Any]:
         import yaml
         with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
-    except ImportError:
-        raise ImportError("pyyaml is required to load YAML configs. Please install it with: pip install pyyaml")
+    except ImportError as err:
+        raise ImportError("pyyaml is required to load YAML configs. Please install it with: pip install pyyaml") from err
 
 
 def load_and_preprocess_data(
     csv_path: str,
     target_col: str = "Churn"
-) -> Tuple[pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series]:
     """
     Load raw Telco Churn CSV and perform basic cleaning:
     - Clean 'TotalCharges' (handle empty strings as NaN)
