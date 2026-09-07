@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Install dependencies
@@ -30,14 +30,7 @@ jobs:
         run: ruff check src tests app.py scripts
 
       - name: Run Unit Tests
-        run: |
-          python -m pytest -v --tb=short > pytest.log 2>&1 || {
-            cat pytest.log
-            cat pytest.log >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
-          cat pytest.log
-
+        run: pytest
 
   train-and-evaluate:
     name: Train, Evaluate & MLflow Tracking
@@ -50,8 +43,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
+
 
       - name: Install dependencies
         run: |

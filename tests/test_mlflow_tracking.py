@@ -14,11 +14,14 @@ from src.pipeline import build_pipeline
 @pytest.fixture
 def mlflow_tmp_backend(tmp_path):
     """Temporary SQLite MLflow tracking backend."""
+    old_uri = mlflow.get_tracking_uri()
     db_path = tmp_path / "mlflow_test.db"
-    mlflow.set_tracking_uri(f"sqlite:///{db_path}")
+    mlflow.set_tracking_uri(f"sqlite:///{db_path.resolve().as_posix()}")
     mlflow.set_experiment("test-experiment")
     yield
-    mlflow.set_tracking_uri(None)
+    if old_uri:
+        mlflow.set_tracking_uri(old_uri)
+
 
 
 def _tiny_dataset():

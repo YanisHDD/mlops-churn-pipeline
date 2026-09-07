@@ -7,6 +7,12 @@ select = ["E", "F", "W"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
 testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]
+
 
