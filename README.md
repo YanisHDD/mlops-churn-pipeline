@@ -69,7 +69,7 @@ mlops-churn-pipeline/
 ├── artifacts/                   # Modeles entraines serialises (non versionnes)
 │   └── model.joblib
 ├── docs/
-│   └── images/                  # Captures d'ecran de l'interface MLflow (Model Registry)
+│   └── images/                  # Captures d'ecran (MLflow Model Registry, Swagger UI)
 ├── .dockerignore
 ├── .env.example                 # Variables d'environnement MLflow et chemins
 ├── .gitattributes               # Normalisation des fins de ligne (LF)
@@ -190,11 +190,15 @@ curl -X POST "http://localhost:8000/predict" \
 **Reponse JSON :**
 ```json
 {
-  "churn_probability": 0.6241,
+  "churn_probability": 0.6171,
   "churn": true,
   "label": "Yes"
 }
 ```
+
+<p align="center">
+  <img src="docs/images/fastapi_swagger_predict.png" width="95%" alt="FastAPI Swagger Documentation et Prediction" />
+</p>
 
 Points cles du service :
 - Validation stricte des donnees d'entree via Pydantic (`Literal` sur chaque modalite, code HTTP 422 avec explications si modalite inconnue).
@@ -205,7 +209,7 @@ Points cles du service :
 ### Inference Batch en CLI
 ```bash
 make predict
-# Scilote data/raw.csv et exporte reports/predictions_batch.csv
+# Score data/raw.csv et exporte reports/predictions_batch.csv
 ```
 
 ---
