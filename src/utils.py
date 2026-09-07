@@ -4,7 +4,6 @@ Utility functions for data loading, preprocessing, config handling, and plotting
 
 import os
 from typing import Dict, Tuple, Any
-import yaml
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -18,8 +17,12 @@ def load_config(config_path: str = "configs/config.yaml") -> Dict[str, Any]:
     """Load configuration from YAML file."""
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except ImportError:
+        raise ImportError("pyyaml is required to load YAML configs. Please install it with: pip install pyyaml")
 
 
 def load_and_preprocess_data(
@@ -45,13 +48,12 @@ def load_and_preprocess_data(
     if "TotalCharges" in df.columns:
         df["TotalCharges"] = pd.to_numeric(df["TotalCharges"].replace(" ", np.nan), errors="coerce")
 
-    # SeniorCitizen is categorical (0 or 1), cast to string or leave as is
+    # SeniorCitizen is categorical (0 or 1), cast to string
     if "SeniorCitizen" in df.columns:
         df["SeniorCitizen"] = df["SeniorCitizen"].astype(str)
 
     # Encode target
     if target_col in df.columns:
-        # If target has Yes/No strings
         if df[target_col].dtype == object:
             y = df[target_col].map({"Yes": 1, "No": 0})
         else:
