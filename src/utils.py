@@ -86,8 +86,8 @@ def setup_mlflow(cfg: dict) -> tuple[str, str]:
     experiment = os.getenv("MLFLOW_EXPERIMENT_NAME", ml_cfg["experiment_name"])
 
     prefix = "sqlite:///"
-    if uri.startswith(prefix) and not Path(uri[len(prefix):]).is_absolute():
-        uri = prefix + (ROOT / uri[len(prefix):]).as_posix()
+    if uri.startswith(prefix) and not Path(uri[len(prefix) :]).is_absolute():
+        uri = prefix + (ROOT / uri[len(prefix) :]).as_posix()
 
     mlflow.set_tracking_uri(uri)
     client = mlflow.MlflowClient()
