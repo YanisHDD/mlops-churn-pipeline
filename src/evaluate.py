@@ -1,110 +1,112 @@
 """
-Evaluation script to assess model performance and log graphical artifacts to MLflow.
+Model evaluation script with MLflow tracking and graphical artifacts.
 """
 
 import argparse
-import json
 import os
-import joblib
+import shutil
 import mlflow
-import pandas as pd
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
+import mlflow.sklearn
+from sklearn.metrics import classification_report, roc_auc_score
 
 from src.utils import (
     load_config,
+    load_data,
     plot_confusion_matrix,
-    plot_precision_recall_curve,
-    plot_roc_curve,
+    plot_pr,
+    plot_roc,
+    split_data,
 )
 
 
-def evaluate(config_path: str = "configs/config.yaml"):
-    config = load_config(config_path)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate model from MLflow Model Registry")
+    parser.add_argument("--config", type=str, default="configs/config.yaml")
+    parser.add_argument(
+        "--model-version",
+        type=str,
+        default=None,
+        help="Version in model registry to evaluate. Defaults to latest version.",
+    )
+    return parser.parse_args()
 
-    # 1. Load Model
-    model_path = os.path.join(config["artifacts"]["output_dir"], config["artifacts"]["model_filename"])
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Trained model not found at '{model_path}'. Run 'make train' first.")
 
-    print(f"Loading trained pipeline from {model_path}...")
-    pipeline = joblib.load(model_path)
+def get_latest_model_version(model_name: str) -> str:
+    """Return latest registered model version number."""
+    client = mlflow.tracking.MlflowClient()
+    versions = client.search_model_versions(f"name='{model_name}'")
+    if not versions:
+        raise RuntimeError(
+            f"No versions found for model '{model_name}'. Run 'python -m src.train' first."
+        )
+    latest = max(versions, key=lambda v: int(v.version))
+    return str(latest.version)
 
-    # 2. Load Test Data
-    test_csv_path = "data/processed/test.csv"
-    if not os.path.exists(test_csv_path):
-        raise FileNotFoundError(f"Test data not found at '{test_csv_path}'. Run 'make train' first.")
 
-    target_col = config["data"]["target"]
-    test_df = pd.read_csv(test_csv_path)
-    X_test = test_df.drop(columns=[target_col])
-    y_test = test_df[target_col]
-    print(f"Loaded {len(X_test)} test examples.")
+def main():
+    args = parse_args()
+    cfg = load_config(args.config)
 
-    # 3. Inferences
-    y_pred = pipeline.predict(X_test)
-    y_prob = pipeline.predict_proba(X_test)[:, 1]
-
-    # 4. Metrics
-    metrics = {
-        "test_roc_auc": float(roc_auc_score(y_test, y_prob)),
-        "test_accuracy": float(accuracy_score(y_test, y_pred)),
-        "test_f1_score": float(f1_score(y_test, y_pred)),
-        "test_precision": float(precision_score(y_test, y_pred)),
-        "test_recall": float(recall_score(y_test, y_pred)),
-    }
-
-    print("\n================ EVALUATION REPORT ================")
-    print(classification_report(y_test, y_pred, target_names=["No Churn (0)", "Churn (1)"]))
-    print(f"ROC-AUC Score : {metrics['test_roc_auc']:.4f}")
-    print("===================================================\n")
-
-    # 5. Generate Graphical Artifacts
-    output_dir = config["artifacts"]["output_dir"]
-    os.makedirs(output_dir, exist_ok=True)
-
-    cm_path = os.path.join(output_dir, "confusion_matrix.png")
-    roc_path = os.path.join(output_dir, "roc_curve.png")
-    pr_path = os.path.join(output_dir, "precision_recall_curve.png")
-    metrics_json_path = os.path.join(output_dir, "metrics.json")
-
-    plot_confusion_matrix(y_test, y_pred, cm_path)
-    plot_roc_curve(y_test, y_prob, roc_path)
-    plot_precision_recall_curve(y_test, y_prob, pr_path)
-
-    with open(metrics_json_path, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=4)
-
-    print(f"Artifacts saved in '{output_dir}/':")
-    print(f"  - {cm_path}")
-    print(f"  - {roc_path}")
-    print(f"  - {pr_path}")
-    print(f"  - {metrics_json_path}")
-
-    # 6. Log Artifacts into MLflow
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns")
-    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", config["mlflow"]["experiment_name"])
+    tracking_uri = os.environ.get(
+        "MLFLOW_TRACKING_URI", cfg.get("mlflow", {}).get("tracking_uri", "sqlite:///mlflow.db")
+    )
+    experiment_name = os.environ.get(
+        "MLFLOW_EXPERIMENT_NAME", cfg.get("mlflow", {}).get("experiment_name", "churn-exp")
+    )
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    with mlflow.start_run(run_name="final-evaluation"):
-        for k, v in metrics.items():
-            mlflow.log_metric(k, v)
-        mlflow.log_artifact(cm_path, artifact_path="evaluation_plots")
-        mlflow.log_artifact(roc_path, artifact_path="evaluation_plots")
-        mlflow.log_artifact(pr_path, artifact_path="evaluation_plots")
-        mlflow.log_artifact(metrics_json_path, artifact_path="metrics")
-        print("\nAll artifacts successfully logged into MLflow.")
+    model_name = cfg.get("mlflow", {}).get("registered_model_name", "ChurnClassifier")
+    version = args.model_version or get_latest_model_version(model_name)
+    model_uri = f"models:/{model_name}/{version}"
+    model = mlflow.sklearn.load_model(model_uri)
+    print(f"Loaded model: {model_uri}")
+
+    df = load_data(cfg)
+    _, X_test, _, y_test = split_data(df, cfg)
+
+    y_proba = model.predict_proba(X_test)[:, 1]
+    y_pred = model.predict(X_test)
+    auc = roc_auc_score(y_test, y_proba)
+    report = classification_report(y_test, y_pred)
+
+    print(f"ROC-AUC (test): {auc:.4f}")
+    print(report)
+
+    output_dir = cfg.get("artifacts", {}).get("output_dir", "artifacts")
+    os.makedirs(output_dir, exist_ok=True)
+
+    with mlflow.start_run(run_name=f"evaluate-{model_name}-v{version}"):
+        mlflow.log_param("evaluated_model_uri", model_uri)
+        mlflow.log_metric("eval_roc_auc", auc)
+
+        roc_path = plot_roc(model, X_test, y_test, out_path="roc_curve.png")
+        pr_path = plot_pr(model, X_test, y_test, out_path="pr_curve.png")
+        cm_path = plot_confusion_matrix(model, X_test, y_test, out_path="confusion_matrix.png")
+
+        mlflow.log_artifact(roc_path)
+        mlflow.log_artifact(pr_path)
+        mlflow.log_artifact(cm_path)
+
+        preds_df = X_test.copy()
+        preds_df["y_true"] = y_test.values
+        preds_df["y_proba"] = y_proba
+        preds_path = "predictions.csv"
+        preds_df.to_csv(preds_path, index=False)
+        mlflow.log_artifact(preds_path)
+
+        # Copy to artifacts directory as well
+        shutil.copy(roc_path, os.path.join(output_dir, "roc_curve.png"))
+        shutil.copy(pr_path, os.path.join(output_dir, "pr_curve.png"))
+        shutil.copy(cm_path, os.path.join(output_dir, "confusion_matrix.png"))
+        shutil.copy(preds_path, os.path.join(output_dir, "predictions.csv"))
+
+    for f in [roc_path, pr_path, cm_path, preds_path]:
+        if os.path.exists(f):
+            os.remove(f)
+
+    print("Evaluation completed and artifacts logged to MLflow.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate customer churn model and generate artifacts")
-    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to YAML config")
-    args = parser.parse_args()
-    evaluate(args.config)
+    main()

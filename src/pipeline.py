@@ -11,53 +11,59 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 def build_pipeline(
-    numeric_features: list[str],
-    categorical_features: list[str],
-    model_type: str = "logistic_regression"
+    numeric=None,
+    categorical=None,
+    model_type="logreg",
+    model_params=None,
+    numeric_features=None,
+    categorical_features=None,
 ) -> Pipeline:
     """
     Construct a complete, leak-free scikit-learn Pipeline with ColumnTransformer.
 
     Args:
-        numeric_features: List of continuous column names.
-        categorical_features: List of categorical column names.
-        model_type: 'logistic_regression' or 'random_forest'.
+        numeric: List of continuous column names.
+        categorical: List of categorical column names.
+        model_type: 'logreg' (or 'logistic_regression') or 'random_forest'.
+        model_params: Dict of parameters to pass to model constructor.
+        numeric_features: Alias for numeric.
+        categorical_features: Alias for categorical.
 
     Returns:
-        Configured scikit-learn Pipeline.
+        Pipeline with 'pre' and 'model' steps.
     """
-    # Numeric pipeline: median imputation + standard scaling
-    numeric_transformer = Pipeline(steps=[
+    num_cols = numeric if numeric is not None else numeric_features
+    cat_cols = categorical if categorical is not None else categorical_features
+    model_params = model_params or {}
+
+    num_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
+        ("scaler", StandardScaler()),
     ])
 
-    # Categorical pipeline: frequent imputation + one-hot encoding
-    categorical_transformer = Pipeline(steps=[
+    cat_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
+        ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
     ])
 
-    # Preprocessor combining both pipelines
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, numeric_features),
-            ("cat", categorical_transformer, categorical_features)
+            ("num", num_transformer, num_cols),
+            ("cat", cat_transformer, cat_cols),
         ],
-        remainder="drop"
+        remainder="drop",
     )
 
-    # Instantiate chosen model
-    if model_type == "logistic_regression":
-        classifier = LogisticRegression(max_iter=1000, random_state=42)
+    if model_type in ("logreg", "logistic_regression"):
+        params = {"max_iter": 500}
+        params.update(model_params)
+        model = LogisticRegression(**params)
     elif model_type == "random_forest":
-        classifier = RandomForestClassifier(random_state=42)
+        params = {"random_state": 42}
+        params.update(model_params)
+        model = RandomForestClassifier(**params)
     else:
-        raise ValueError(
-            f"Unsupported model_type: '{model_type}'. Choose 'logistic_regression' or 'random_forest'."
-        )
+        raise ValueError(f"Unsupported model_type: {model_type}")
 
-    return Pipeline(steps=[
-        ("preprocessor", preprocessor),
-        ("model", classifier)
-    ])
+    return Pipeline(steps=[("pre", preprocessor), ("model", model)])
+

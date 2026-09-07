@@ -16,6 +16,8 @@ artifacts/
 
 # MLflow
 mlruns/
+mlflow.db
+*.db
 .trash/
 
 # Testing and coverage

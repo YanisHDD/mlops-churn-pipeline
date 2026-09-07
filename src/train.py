@@ -7,146 +7,96 @@ import os
 import joblib
 import mlflow
 import mlflow.sklearn
-from mlflow.models.signature import infer_signature
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
 from src.pipeline import build_pipeline
-from src.utils import load_and_preprocess_data, load_config
+from src.utils import load_config, load_data, split_data
 
 
-def train(config_path: str = "configs/config.yaml"):
-    config = load_config(config_path)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train customer churn classifier with MLflow")
+    parser.add_argument("--config", type=str, default="configs/config.yaml")
+    return parser.parse_args()
 
-    # 1. Setup MLflow
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns")
-    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", config["mlflow"]["experiment_name"])
+
+def main():
+    args = parse_args()
+    cfg = load_config(args.config)
+
+    # MLflow configuration
+    tracking_uri = os.environ.get(
+        "MLFLOW_TRACKING_URI", cfg.get("mlflow", {}).get("tracking_uri", "sqlite:///mlflow.db")
+    )
+    experiment_name = os.environ.get(
+        "MLFLOW_EXPERIMENT_NAME", cfg.get("mlflow", {}).get("experiment_name", "churn-exp")
+    )
+
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
+    mlflow.sklearn.autolog(log_models=False)
 
     print(f"MLflow Tracking URI : {tracking_uri}")
     print(f"MLflow Experiment   : {experiment_name}")
 
-    # 2. Load & Preprocess Data
-    data_cfg = config["data"]
-    feat_cfg = config["features"]
-    print(f"Loading data from {data_cfg['csv_path']}...")
-    X, y = load_and_preprocess_data(data_cfg["csv_path"], target_col=data_cfg["target"])
+    # Load and split data
+    df = load_data(cfg)
+    X_train, X_test, y_train, y_test = split_data(df, cfg)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=data_cfg["test_size"],
-        random_state=data_cfg["random_state"],
-        stratify=y
-    )
+    numeric = cfg["features"]["numeric"]
+    categorical = cfg["features"]["categorical"]
+    model_type = cfg["model"]["type"]
 
-    # Save test set for evaluate.py
-    os.makedirs("data/processed", exist_ok=True)
-    test_df = X_test.copy()
-    test_df[data_cfg["target"]] = y_test
-    test_df.to_csv("data/processed/test.csv", index=False)
-    print(f"Train samples: {len(X_train)}, Test samples: {len(X_test)}")
+    pipe = build_pipeline(numeric, categorical, model_type=model_type)
+    param_grid = {f"model__{k}": v for k, v in cfg["model"]["params"].items()}
 
-    # 3. Model & Pipeline configuration
-    model_type = config["model"]["type"]
-    param_grid = config["model"]["hyperparameters"][model_type]
-    pipe = build_pipeline(
-        numeric_features=feat_cfg["numeric"],
-        categorical_features=feat_cfg["categorical"],
-        model_type=model_type
-    )
-
-    cv_strategy = StratifiedKFold(
-        n_splits=config["cv"]["n_splits"],
+    cv = StratifiedKFold(
+        n_splits=cfg["cv"]["n_splits"],
         shuffle=True,
-        random_state=data_cfg["random_state"]
+        random_state=cfg["data"]["random_state"]
     )
 
-    grid_search = GridSearchCV(
-        estimator=pipe,
+    grid = GridSearchCV(
+        pipe,
         param_grid=param_grid,
-        cv=cv_strategy,
-        scoring=config["cv"]["scoring"],
+        scoring=cfg["cv"]["scoring"],
+        cv=cv,
         n_jobs=-1,
-        verbose=1
+        refit=True,
     )
 
-    # 4. Train with MLflow tracking
-    with mlflow.start_run(run_name=f"train-{model_type}") as run:
-        print(f"Started MLflow run: {run.info.run_id}")
+    run_name = f"{model_type}-gridsearch"
+    with mlflow.start_run(run_name=run_name) as run:
+        print(f"Running GridSearchCV for {model_type}...")
+        grid.fit(X_train, y_train)
 
-        # Log parameters
-        mlflow.log_params({
-            "model_type": model_type,
-            "test_size": data_cfg["test_size"],
-            "cv_splits": config["cv"]["n_splits"],
-            "scoring_metric": config["cv"]["scoring"],
-            "num_numeric_features": len(feat_cfg["numeric"]),
-            "num_categorical_features": len(feat_cfg["categorical"]),
-        })
+        best_score = grid.best_score_
+        test_score = grid.score(X_test, y_test)
 
-        # Fit GridSearch
-        grid_search.fit(X_train, y_train)
+        mlflow.log_params(grid.best_params_)
+        mlflow.log_metric("cv_best_score", best_score)
+        mlflow.log_metric("test_score", test_score)
 
-        best_pipeline = grid_search.best_estimator_
-        best_params = grid_search.best_params_
-        best_cv_score = grid_search.best_score_
-
-        print(f"Best CV {config['cv']['scoring']}: {best_cv_score:.4f}")
-        print(f"Best Params: {best_params}")
-
-        # Log best hyperparams
-        for p_name, p_val in best_params.items():
-            mlflow.log_param(f"best_{p_name}", str(p_val))
-        mlflow.log_metric("best_cv_roc_auc", best_cv_score)
-
-        # Evaluate on Test Set
-        y_pred = best_pipeline.predict(X_test)
-        y_prob = best_pipeline.predict_proba(X_test)[:, 1]
-
-        test_metrics = {
-            "test_roc_auc": float(roc_auc_score(y_test, y_prob)),
-            "test_accuracy": float(accuracy_score(y_test, y_pred)),
-            "test_f1": float(f1_score(y_test, y_pred)),
-            "test_precision": float(precision_score(y_test, y_pred)),
-            "test_recall": float(recall_score(y_test, y_pred)),
-        }
-
-        print("\n--- Test Set Results ---")
-        for k, v in test_metrics.items():
-            print(f"{k}: {v:.4f}")
-            mlflow.log_metric(k, v)
-
-        # Model signature and logging
-        sample_input = X_train.head(5)
-        signature = infer_signature(sample_input, best_pipeline.predict(sample_input))
-
+        registered_name = cfg.get("mlflow", {}).get("registered_model_name", "ChurnClassifier")
         mlflow.sklearn.log_model(
-            sk_model=best_pipeline,
-            artifact_path=config["mlflow"]["artifact_path"],
-            signature=signature,
-            input_example=sample_input
+            grid.best_estimator_,
+            artifact_path="model",
+            registered_model_name=registered_name,
+            serialization_format="pickle",
         )
 
-        # Save local model artifact for FastAPI microservice
-        output_dir = config["artifacts"]["output_dir"]
+        # Also save locally for FastAPI microservice
+        output_dir = cfg.get("artifacts", {}).get("output_dir", "artifacts")
+        model_filename = cfg.get("artifacts", {}).get("model_filename", "model.joblib")
         os.makedirs(output_dir, exist_ok=True)
-        model_path = os.path.join(output_dir, config["artifacts"]["model_filename"])
-        joblib.dump(best_pipeline, model_path)
-        print(f"\nModel saved locally to {model_path}")
+        local_model_path = os.path.join(output_dir, model_filename)
+        joblib.dump(grid.best_estimator_, local_model_path)
 
-        print(f"MLflow Run finished successfully. Run ID: {run.info.run_id}")
-        return run.info.run_id
+        print(f"Best params: {grid.best_params_}")
+        print(f"CV best score ({cfg['cv']['scoring']}): {best_score:.4f}")
+        print(f"Test score: {test_score:.4f}")
+        print(f"Model saved locally to {local_model_path}")
+        print(f"MLflow Run ID: {run.info.run_id}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train customer churn classifier with MLflow")
-    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to YAML config")
-    args = parser.parse_args()
-    train(args.config)
+    main()
