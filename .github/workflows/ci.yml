@@ -30,7 +30,13 @@ jobs:
         run: ruff check src tests app.py scripts
 
       - name: Run Unit Tests
-        run: python -m pytest -v
+        run: |
+          python -m pytest -v --tb=short > pytest.log 2>&1 || {
+            cat pytest.log
+            cat pytest.log >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          cat pytest.log
 
 
   train-and-evaluate:
