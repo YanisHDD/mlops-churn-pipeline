@@ -68,6 +68,8 @@ mlops-churn-pipeline/
 │   └── test_service.py          # Tests de l'API FastAPI et validation Pydantic
 ├── artifacts/                   # Modeles entraines serialises (non versionnes)
 │   └── model.joblib
+├── docs/
+│   └── images/                  # Captures d'ecran de l'interface MLflow (Model Registry)
 ├── .dockerignore
 ├── .env.example                 # Variables d'environnement MLflow et chemins
 ├── .gitattributes               # Normalisation des fins de ligne (LF)
@@ -139,6 +141,14 @@ Chargement du modele directement depuis le registre MLflow :
 ```bash
 python -m src.evaluate --from-registry
 ```
+
+### Model Registry dans MLflow UI
+
+Visualisation du modele `ChurnClassifier` enregistre avec ses versions successives et l'alias `staging` dans l'interface MLflow :
+
+<p align="center">
+  <img src="docs/images/mlflow_model_registry.png" width="95%" alt="MLflow Model Registry ChurnClassifier" />
+</p>
 
 ---
 

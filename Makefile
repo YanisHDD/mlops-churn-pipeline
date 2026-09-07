@@ -54,7 +54,7 @@ ui:              ## interface MLflow sur http://localhost:5000
 	$(PY) -m mlflow ui --backend-store-uri $(MLFLOW_TRACKING_URI) --port 5000
 
 serve:           ## API FastAPI sur http://localhost:8000/docs
-	$(PY) -m uvicorn service.app:app --host 0.0.0.0 --port 8000 --reload
+	$(PY) -m uvicorn service.app:app --host 0.0.0.0 --port 8000
 
 docker-build:    ## image Docker de l'API
 	docker build -t churn-api:latest -f service/Dockerfile .

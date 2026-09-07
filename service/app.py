@@ -9,6 +9,7 @@ from typing import Literal
 import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.utils import ROOT, coerce_features, load_config
@@ -23,6 +24,13 @@ app = FastAPI(
     description="Probabilite qu'un client Telco resilie, d'apres le pipeline suivi par MLflow.",
     version="1.0.0",
 )
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """Redirige la racine vers la documentation Swagger interactive."""
+    return RedirectResponse(url="/docs")
+
 
 _model = None
 
