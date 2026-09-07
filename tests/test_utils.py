@@ -1,66 +1,108 @@
-"""
-Unit tests for data utility functions.
-"""
+"""Tests des utilitaires : coercition des types, chargement, split, metriques, graphiques."""
 
+import numpy as np
 import pandas as pd
 import pytest
-import yaml
 
-from src.utils import load_config, load_data, split_data
+from src.utils import (
+    ROOT,
+    coerce_features,
+    compute_metrics,
+    load_config,
+    load_data,
+    save_evaluation_plots,
+    split_data,
+)
+
+NUMERIC = ["tenure", "TotalCharges"]
+CATEGORICAL = ["SeniorCitizen", "Contract"]
+
+
+def test_coerce_features_handles_telco_quirks():
+    df = pd.DataFrame(
+        {
+            "Contract": ["One year", "Two year", None],
+            "TotalCharges": ["29.85", " ", "100"],
+            "SeniorCitizen": [0, 1, 0],
+            "tenure": [1, 0, 12],
+            "extra": ["ignore", "moi", "aussi"],
+        }
+    )
+    X = coerce_features(df, NUMERIC, CATEGORICAL)
+
+    assert list(X.columns) == NUMERIC + CATEGORICAL
+    assert X["TotalCharges"].dtype.kind == "f"
+    assert np.isnan(X.loc[1, "TotalCharges"])
+    assert X["SeniorCitizen"].tolist() == ["0", "1", "0"]
+    assert X["Contract"].dtype == object
+    assert pd.isna(X.loc[2, "Contract"])
 
 
 @pytest.fixture
-def sample_cfg(tmp_path):
-    """Minimal config and dummy CSV written to disk."""
-    csv_path = tmp_path / "raw.csv"
-    df = pd.DataFrame({
-        "num1": [1, 2, 3, 4, 5, 6, 7, 8, " ", 10],  # blank string coerced to NaN
-        "cat1": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b"],
-        "target": ["Yes", "No", "Yes", "No", "Yes", "No", "Yes", "No", "Yes", "No"],
-    })
-    df.to_csv(csv_path, index=False)
-
-    cfg = {
+def small_cfg(tmp_path):
+    csv = tmp_path / "raw.csv"
+    pd.DataFrame(
+        {
+            "customerID": [f"id{i}" for i in range(10)],
+            "tenure": range(10),
+            "TotalCharges": ["10", " ", "30", "40", "50", "60", "70", "80", "90", "100"],
+            "SeniorCitizen": [0, 1] * 5,
+            "Contract": ["One year", "Two year"] * 5,
+            "Churn": ["Yes", "No"] * 5,
+        }
+    ).to_csv(csv, index=False)
+    return {
         "data": {
-            "csv_path": str(csv_path),
-            "target": "target",
-            "test_size": 0.3,
-            "random_state": 42,
+            "csv_path": str(csv),
+            "target": "Churn",
+            "positive_label": "Yes",
+            "drop_columns": ["customerID"],
+            "test_size": 0.2,
+            "random_state": 0,
         },
-        "features": {
-            "numeric": ["num1"],
-            "categorical": ["cat1"],
-        },
+        "features": {"numeric": NUMERIC, "categorical": CATEGORICAL},
     }
-    cfg_path = tmp_path / "config.yaml"
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump(cfg, f)
-
-    return str(cfg_path), cfg
 
 
-def test_load_config_reads_yaml(sample_cfg):
-    cfg_path, expected = sample_cfg
-    loaded = load_config(cfg_path)
-    assert loaded == expected
+def test_load_data_and_split(small_cfg):
+    X, y = load_data(small_cfg)
+    assert list(X.columns) == NUMERIC + CATEGORICAL
+    assert set(y.unique()) == {0, 1}
+    assert y.sum() == 5
+
+    X_train, X_test, y_train, y_test = split_data(X, y, small_cfg)
+    assert len(X_test) == 2
+    assert len(X_train) + len(X_test) == len(X)
+    assert sorted(y_test.tolist()) == [0, 1]
 
 
-def test_load_data_coerces_numeric_and_handles_blanks(sample_cfg):
-    """Blank strings in numeric features are coerced to NaN."""
-    _, cfg = sample_cfg
-    df = load_data(cfg)
-    assert pd.api.types.is_numeric_dtype(df["num1"])
-    assert df["num1"].isna().sum() == 1
+def test_split_is_reproducible(small_cfg):
+    X, y = load_data(small_cfg)
+    _, test_a, _, _ = split_data(X, y, small_cfg)
+    _, test_b, _, _ = split_data(X, y, small_cfg)
+    assert test_a.index.tolist() == test_b.index.tolist()
 
 
-def test_split_data_shapes_and_target_encoding(sample_cfg):
-    _, cfg = sample_cfg
-    df = load_data(cfg)
-    X_train, X_test, y_train, y_test = split_data(df, cfg)
+def test_compute_metrics_perfect_and_keys():
+    y = [0, 0, 1, 1]
+    metrics = compute_metrics(y, [0.1, 0.2, 0.8, 0.9])
+    assert set(metrics) == {"roc_auc", "pr_auc", "accuracy", "precision", "recall", "f1"}
+    assert metrics["roc_auc"] == 1.0
+    assert metrics["accuracy"] == 1.0
 
-    assert len(X_train) == 7
-    assert len(X_test) == 3
-    assert len(X_train) + len(X_test) == len(df)
-    assert set(y_train.unique()) <= {0, 1}
-    assert set(y_test.unique()) <= {0, 1}
-    assert "target" not in X_train.columns
+
+def test_save_evaluation_plots_writes_three_pngs(tmp_path):
+    y = np.array([0, 0, 1, 1, 0, 1])
+    proba = np.array([0.1, 0.4, 0.6, 0.9, 0.7, 0.3])
+    paths = save_evaluation_plots(y, proba, tmp_path)
+    assert set(paths) == {"roc", "pr", "cm"}
+    for path in paths.values():
+        assert path.exists() and path.stat().st_size > 0
+
+
+def test_project_config_is_consistent():
+    """La config reelle du projet reste coherente avec le code."""
+    cfg = load_config(ROOT / "configs" / "config.yaml")
+    assert cfg["model"]["type"] in {"logreg", "random_forest"}
+    assert not set(cfg["features"]["numeric"]) & set(cfg["features"]["categorical"])
+    assert cfg["mlflow"]["tracking_uri"].startswith("sqlite:///")

@@ -1,67 +1,65 @@
-PY = python
-VENV = .venv
-EXP = churn-exp
+PY_SYS ?= python
+ifeq ($(OS),Windows_NT)
+PY = .venv/Scripts/python.exe
+else
+PY = .venv/bin/python
+endif
 
-.PHONY: help init data baseline train evaluate test lint format run-api mlflow-ui verify-mlflow pipeline docker-build docker-run clean
+CONFIG ?= configs/config.yaml
+EXP ?= churn-exp
+MLFLOW_TRACKING_URI ?= sqlite:///mlflow.db
+export MLFLOW_TRACKING_URI
+export MLFLOW_EXPERIMENT_NAME = $(EXP)
+
+.PHONY: help init data baseline train evaluate predict test lint format ui serve docker-build docker-run all clean
 
 help:
-	@echo "Available commands:"
-	@echo "  make init          - Create virtual environment and install dependencies"
-	@echo "  make data          - Download the Telco Churn raw dataset"
-	@echo "  make baseline      - Run baseline model verification without tuning"
-	@echo "  make train         - Train model with GridSearchCV and log to MLflow"
-	@echo "  make evaluate      - Evaluate model from Registry and generate plot artifacts"
-	@echo "  make test          - Run pytest unit tests"
-	@echo "  make lint          - Run ruff linter"
-	@echo "  make format        - Format code using ruff"
-	@echo "  make run-api       - Run FastAPI server locally on port 8000"
-	@echo "  make mlflow-ui     - Run MLflow UI connected to sqlite:///mlflow.db"
-	@echo "  make verify-mlflow - Verify MLflow server REST API headless"
-	@echo "  make pipeline      - Run full pipeline: data -> baseline -> train -> evaluate -> test"
-	@echo "  make docker-build  - Build Docker container image"
-	@echo "  make docker-run    - Run containerized microservice"
+	@$(PY_SYS) -c "import re; [print(f'{n:14s} {d}') for n, d in sorted(re.findall(r'^([a-z-]+):[^#]*## *(.*)$$', open('Makefile').read(), re.M))]"
 
 init:
-	$(PY) -m venv $(VENV) && . $(VENV)/bin/activate && pip install -U pip && pip install -r requirements.txt
+	$(PY_SYS) -m venv .venv
+	$(PY) -m pip install -U pip
+	$(PY) -m pip install -r requirements.txt
 
 data:
-	$(PY) download_data.py
+	$(PY) -m src.download_data --config $(CONFIG)
 
 baseline:
-	$(PY) -m src.baseline --config configs/config.yaml
+	$(PY) -m src.train --config $(CONFIG) --no-tuning
 
 train:
-	MLFLOW_EXPERIMENT_NAME=$(EXP) $(PY) -m src.train --config configs/config.yaml
+	$(PY) -m src.train --config $(CONFIG)
 
 evaluate:
-	MLFLOW_EXPERIMENT_NAME=$(EXP) $(PY) -m src.evaluate --config configs/config.yaml
+	$(PY) -m src.evaluate --config $(CONFIG)
+
+predict:
+	$(PY) -m src.predict --config $(CONFIG) --input data/raw.csv --output reports/predictions_batch.csv
 
 test:
-	pytest -q
+	$(PY) -m pytest
 
 lint:
-	ruff check src tests app.py scripts
+	$(PY) -m ruff check .
+	$(PY) -m ruff format --check .
 
 format:
-	ruff format src tests app.py scripts
+	$(PY) -m ruff format .
+	$(PY) -m ruff check --fix .
 
-run-api:
-	uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+ui:
+	$(PY) -m mlflow ui --backend-store-uri $(MLFLOW_TRACKING_URI) --port 5000
 
-mlflow-ui:
-	mlflow ui --backend-store-uri sqlite:///mlflow.db
-
-verify-mlflow:
-	$(PY) scripts/verify_mlflow_ui.py sqlite:///mlflow.db $(EXP) ChurnClassifier
-
-pipeline: data baseline train evaluate test verify-mlflow
+serve:
+	$(PY) -m uvicorn service.app:app --host 0.0.0.0 --port 8000 --reload
 
 docker-build:
-	docker build -t churn-classifier:latest .
+	docker build -t churn-api:latest -f service/Dockerfile .
 
 docker-run:
-	docker run -p 8000:8000 --name churn-api churn-classifier:latest
+	docker run --rm -p 8000:8000 churn-api:latest
+
+all: data train evaluate test
 
 clean:
-	rm -rf __pycache__ .pytest_cache .ruff_cache mlruns mlflow.db artifacts/*.png artifacts/predictions.csv
-
+	$(PY_SYS) -c "import shutil, glob; [shutil.rmtree(p, ignore_errors=True) for p in ['reports', '.pytest_cache', '.ruff_cache'] + glob.glob('**/__pycache__', recursive=True)]"

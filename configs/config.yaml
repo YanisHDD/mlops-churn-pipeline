@@ -1,43 +1,48 @@
 data:
   csv_path: data/raw.csv
-  raw_url: "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv"
+  url: https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv
   target: Churn
+  positive_label: "Yes"
+  drop_columns: [customerID]
   test_size: 0.2
   random_state: 42
 
 features:
-  numeric:
-    - "tenure"
-    - "MonthlyCharges"
-    - "TotalCharges"
+  numeric: [tenure, MonthlyCharges, TotalCharges]
   categorical:
-    - "gender"
-    - "SeniorCitizen"
-    - "Partner"
-    - "Dependents"
-    - "PhoneService"
-    - "InternetService"
-    - "Contract"
-    - "PaperlessBilling"
-    - "PaymentMethod"
+    - gender
+    - SeniorCitizen
+    - Partner
+    - Dependents
+    - PhoneService
+    - MultipleLines
+    - InternetService
+    - OnlineSecurity
+    - OnlineBackup
+    - DeviceProtection
+    - TechSupport
+    - StreamingTV
+    - StreamingMovies
+    - Contract
+    - PaperlessBilling
+    - PaymentMethod
 
 model:
-  type: "logreg"  # options: logreg, random_forest
-  params:
+  type: logreg            # logreg | random_forest
+  params:                 # grille exploree par GridSearchCV
     C: [0.1, 1.0, 10.0]
-    solver: ["lbfgs"]
-
+    solver: [lbfgs, liblinear]
 
 cv:
-  strategy: "StratifiedKFold"
+  strategy: StratifiedKFold
   n_splits: 5
-  scoring: "roc_auc"
+  scoring: roc_auc
 
 mlflow:
-  tracking_uri: "sqlite:///mlflow.db"
-  experiment_name: "churn-exp"
-  registered_model_name: "ChurnClassifier"
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: churn-exp
+  registered_model_name: ChurnClassifier
 
 artifacts:
-  output_dir: "artifacts"
-  model_filename: "model.joblib"
+  model_path: artifacts/model.joblib
+  reports_dir: reports

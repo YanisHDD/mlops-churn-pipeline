@@ -1,101 +1,133 @@
-"""
-Model training script with scikit-learn Pipeline, GridSearchCV, and MLflow tracking.
-"""
+"""Entrainement du classifieur de churn."""
+
+from __future__ import annotations
 
 import argparse
-import os
+import json
+import warnings
+
 import joblib
 import mlflow
 import mlflow.sklearn
+from mlflow.models import infer_signature
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
-from src.pipeline import build_pipeline
-from src.utils import load_config, load_data, split_data
+from src.pipeline import build_param_grid, build_pipeline
+from src.utils import (
+    compute_metrics,
+    load_config,
+    load_data,
+    resolve,
+    setup_mlflow,
+    split_data,
+)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train customer churn classifier with MLflow")
-    parser.add_argument("--config", type=str, default="configs/config.yaml")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="configs/config.yaml")
+    parser.add_argument(
+        "--no-tuning", action="store_true", help="entraine la baseline, sans GridSearchCV"
+    )
+    parser.add_argument(
+        "--no-register", action="store_true", help="n'enregistre pas le modele dans le registre"
+    )
     return parser.parse_args()
 
 
-def main():
+def register_model(model_info, cfg: dict) -> None:
+    """Pose l'alias 'staging' sur la version qui vient d'etre enregistree."""
+    name = cfg["mlflow"]["registered_model_name"]
+    version = model_info.registered_model_version
+    client = mlflow.MlflowClient()
+    client.set_registered_model_alias(name, "staging", version)
+    client.set_model_version_tag(name, version, "stage", "Staging")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            client.transition_model_version_stage(name, version, stage="Staging")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Transition de stage non disponible ({exc.__class__.__name__}), alias pose.")
+    print(f"Registre : {name} version {version} -> alias 'staging'")
+
+
+def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
+    uri, experiment = setup_mlflow(cfg)
+    print(f"MLflow : {uri} | experience '{experiment}'")
 
-    # MLflow configuration
-    tracking_uri = os.environ.get(
-        "MLFLOW_TRACKING_URI", cfg.get("mlflow", {}).get("tracking_uri", "sqlite:///mlflow.db")
-    )
-    experiment_name = os.environ.get(
-        "MLFLOW_EXPERIMENT_NAME", cfg.get("mlflow", {}).get("experiment_name", "churn-exp")
-    )
-
-    mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(experiment_name)
-    mlflow.sklearn.autolog(log_models=False)
-
-    print(f"MLflow Tracking URI : {tracking_uri}")
-    print(f"MLflow Experiment   : {experiment_name}")
-
-    # Load and split data
-    df = load_data(cfg)
-    X_train, X_test, y_train, y_test = split_data(df, cfg)
-
-    numeric = cfg["features"]["numeric"]
-    categorical = cfg["features"]["categorical"]
+    X, y = load_data(cfg)
+    X_train, X_test, y_train, y_test = split_data(X, y, cfg)
+    numeric, categorical = cfg["features"]["numeric"], cfg["features"]["categorical"]
     model_type = cfg["model"]["type"]
+    pipe = build_pipeline(numeric, categorical, model_type)
 
-    pipe = build_pipeline(numeric, categorical, model_type=model_type)
-    param_grid = {f"model__{k}": v for k, v in cfg["model"]["params"].items()}
+    mlflow.sklearn.autolog(log_models=False, log_input_examples=False, silent=True)
 
-    cv = StratifiedKFold(
-        n_splits=cfg["cv"]["n_splits"],
-        shuffle=True,
-        random_state=cfg["data"]["random_state"]
-    )
-
-    grid = GridSearchCV(
-        pipe,
-        param_grid=param_grid,
-        scoring=cfg["cv"]["scoring"],
-        cv=cv,
-        n_jobs=-1,
-        refit=True,
-    )
-
-    run_name = f"{model_type}-gridsearch"
+    run_name = f"{'baseline' if args.no_tuning else 'gridsearch'}-{model_type}"
     with mlflow.start_run(run_name=run_name) as run:
-        print(f"Running GridSearchCV for {model_type}...")
-        grid.fit(X_train, y_train)
-
-        best_score = grid.best_score_
-        test_score = grid.score(X_test, y_test)
-
-        mlflow.log_params(grid.best_params_)
-        mlflow.log_metric("cv_best_score", best_score)
-        mlflow.log_metric("test_score", test_score)
-
-        registered_name = cfg.get("mlflow", {}).get("registered_model_name", "ChurnClassifier")
-        mlflow.sklearn.log_model(
-            grid.best_estimator_,
-            artifact_path="model",
-            registered_model_name=registered_name,
-            serialization_format="pickle",
+        mlflow.set_tags({"stage": "training", "model_type": model_type})
+        mlflow.log_params(
+            {
+                "tuning": not args.no_tuning,
+                "n_train": len(X_train),
+                "n_test": len(X_test),
+                "test_size": cfg["data"]["test_size"],
+                "random_state": cfg["data"]["random_state"],
+            }
         )
 
-        # Also save locally for FastAPI microservice
-        output_dir = cfg.get("artifacts", {}).get("output_dir", "artifacts")
-        model_filename = cfg.get("artifacts", {}).get("model_filename", "model.joblib")
-        os.makedirs(output_dir, exist_ok=True)
-        local_model_path = os.path.join(output_dir, model_filename)
-        joblib.dump(grid.best_estimator_, local_model_path)
+        if args.no_tuning:
+            pipe.fit(X_train, y_train)
+            best = pipe
+        else:
+            cv = StratifiedKFold(
+                n_splits=cfg["cv"]["n_splits"],
+                shuffle=True,
+                random_state=cfg["data"]["random_state"],
+            )
+            grid = GridSearchCV(
+                pipe,
+                build_param_grid(cfg["model"]["params"]),
+                cv=cv,
+                scoring=cfg["cv"]["scoring"],
+                n_jobs=-1,
+                refit=True,
+            )
+            grid.fit(X_train, y_train)
+            best = grid.best_estimator_
+            mlflow.log_metric(f"best_cv_{cfg['cv']['scoring']}", grid.best_score_)
+            mlflow.log_dict(grid.best_params_, "best_params.json")
+            print(f"Meilleurs parametres : {grid.best_params_}")
+            print(f"Meilleur {cfg['cv']['scoring']} (CV) : {grid.best_score_:.4f}")
 
-        print(f"Best params: {grid.best_params_}")
-        print(f"CV best score ({cfg['cv']['scoring']}): {best_score:.4f}")
-        print(f"Test score: {test_score:.4f}")
-        print(f"Model saved locally to {local_model_path}")
-        print(f"MLflow Run ID: {run.info.run_id}")
+        proba = best.predict_proba(X_test)[:, 1]
+        metrics = compute_metrics(y_test, proba)
+        mlflow.log_metrics({f"test_{k}": v for k, v in metrics.items()})
+        print("Jeu de test :", json.dumps({k: round(v, 4) for k, v in metrics.items()}))
+
+        # Pipeline pour l'API et evaluate.py
+        model_path = resolve(cfg["artifacts"]["model_path"])
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(best, model_path)
+        print(f"Pipeline sauve : {model_path}")
+
+        signature = infer_signature(X_train.head(), best.predict_proba(X_train.head()))
+        model_info = mlflow.sklearn.log_model(
+            best,
+            name="model",
+            signature=signature,
+            input_example=X_train.head(3),
+            serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+            registered_model_name=None
+            if args.no_register
+            else cfg["mlflow"]["registered_model_name"],
+        )
+        if not args.no_register:
+            register_model(model_info, cfg)
+
+        print(f"Run MLflow : {run.info.run_id}")
 
 
 if __name__ == "__main__":

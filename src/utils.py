@@ -1,90 +1,152 @@
-"""
-Utility functions for data loading, preprocessing, config handling, and plotting.
-"""
+"""Fonctions partagees : configuration, donnees, split, MLflow, metriques, graphiques."""
+
+from __future__ import annotations
 
 import os
-from typing import Any
+from pathlib import Path
+
 import matplotlib
-matplotlib.use("Agg")
+
+matplotlib.use("Agg")  # pas de fenetre : on ecrit des fichiers
+
 import matplotlib.pyplot as plt
+import mlflow
+import numpy as np
 import pandas as pd
+import yaml
+from dotenv import load_dotenv
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     PrecisionRecallDisplay,
     RocCurveDisplay,
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
-import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_config(path: str = "configs/config.yaml") -> dict[str, Any]:
-    """Load configuration from YAML file."""
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Configuration file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
+# ----------------------------------------------------------------- configuration
+def load_config(path: str | Path) -> dict:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
-def load_data(cfg: dict[str, Any]) -> pd.DataFrame:
-    """Load raw CSV and coerce numeric columns to float, turning blanks into NaN."""
-    csv_path = cfg["data"]["csv_path"]
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Data file not found at {csv_path}. Run download_data.py first.")
-    df = pd.read_csv(csv_path)
-    for col in cfg["features"]["numeric"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+def resolve(path: str | Path) -> Path:
+    """Chemin absolu : tel quel s'il l'est deja, sinon relatif a la racine du projet."""
+    path = Path(path)
+    return path if path.is_absolute() else ROOT / path
 
 
-def split_data(df: pd.DataFrame, cfg: dict[str, Any]):
-    """Split dataframe into X_train, X_test, y_train, y_test with stratification."""
-    target = cfg["data"]["target"]
-    numeric = cfg["features"]["numeric"]
-    categorical = cfg["features"]["categorical"]
+# ----------------------------------------------------------------------- donnees
+def coerce_features(df: pd.DataFrame, numeric: list[str], categorical: list[str]) -> pd.DataFrame:
+    """Met les colonnes dans le type attendu par le pipeline, dans l'ordre attendu."""
+    df = df.copy()
+    for col in numeric:
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    for col in categorical:
+        df[col] = df[col].map(lambda v: np.nan if pd.isna(v) else str(v)).astype(object)
+    return df[numeric + categorical]
 
-    X = df[numeric + categorical]
-    y = df[target]
 
-    if y.dtype == object:
-        y = y.map({"Yes": 1, "No": 0}).fillna(y)
-        y = y.astype(int)
+def load_data(cfg: dict) -> tuple[pd.DataFrame, pd.Series]:
+    """Lit le CSV brut et renvoie (X, y), y en 0/1."""
+    data_cfg = cfg["data"]
+    df = pd.read_csv(resolve(data_cfg["csv_path"]))
+    df = df.drop(columns=data_cfg.get("drop_columns", []), errors="ignore")
 
+    y = (df[data_cfg["target"]] == data_cfg["positive_label"]).astype(int)
+    X = coerce_features(df, cfg["features"]["numeric"], cfg["features"]["categorical"])
+    return X, y
+
+
+def split_data(X: pd.DataFrame, y: pd.Series, cfg: dict):
+    """Split stratifie et reproductible."""
+    data_cfg = cfg["data"]
     return train_test_split(
         X,
         y,
-        test_size=cfg["data"]["test_size"],
-        random_state=cfg["data"]["random_state"],
+        test_size=data_cfg["test_size"],
+        random_state=data_cfg["random_state"],
         stratify=y,
     )
 
 
-def plot_roc(model, X_test, y_test, out_path="roc_curve.png") -> str:
-    """Generate and save ROC curve figure."""
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    RocCurveDisplay.from_estimator(model, X_test, y_test, ax=ax)
-    fig.savefig(out_path, bbox_inches="tight")
+# ------------------------------------------------------------------------ MLflow
+def setup_mlflow(cfg: dict) -> tuple[str, str]:
+    """Configure le tracking MLflow. Priorite : variables d'environnement (.env) > config."""
+    load_dotenv(ROOT / ".env")
+    ml_cfg = cfg["mlflow"]
+    uri = os.getenv("MLFLOW_TRACKING_URI", ml_cfg["tracking_uri"])
+    experiment = os.getenv("MLFLOW_EXPERIMENT_NAME", ml_cfg["experiment_name"])
+
+    prefix = "sqlite:///"
+    if uri.startswith(prefix) and not Path(uri[len(prefix):]).is_absolute():
+        uri = prefix + (ROOT / uri[len(prefix):]).as_posix()
+
+    mlflow.set_tracking_uri(uri)
+    client = mlflow.MlflowClient()
+    if client.get_experiment_by_name(experiment) is None:
+        client.create_experiment(experiment, artifact_location=(ROOT / "mlruns").as_uri())
+    mlflow.set_experiment(experiment)
+    return uri, experiment
+
+
+# --------------------------------------------------------------------- metriques
+def compute_metrics(y_true, proba, threshold: float = 0.5) -> dict[str, float]:
+    y_true = np.asarray(y_true)
+    proba = np.asarray(proba)
+    pred = (proba >= threshold).astype(int)
+    return {
+        "roc_auc": float(roc_auc_score(y_true, proba)),
+        "pr_auc": float(average_precision_score(y_true, proba)),
+        "accuracy": float(accuracy_score(y_true, pred)),
+        "precision": float(precision_score(y_true, pred, zero_division=0)),
+        "recall": float(recall_score(y_true, pred, zero_division=0)),
+        "f1": float(f1_score(y_true, pred, zero_division=0)),
+    }
+
+
+# ------------------------------------------------------------------- graphiques
+def save_evaluation_plots(y_true, proba, out_dir: str | Path, threshold: float = 0.5) -> dict:
+    """Courbe ROC, courbe precision-rappel et matrice de confusion en PNG."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    y_true = np.asarray(y_true)
+    proba = np.asarray(proba)
+    pred = (proba >= threshold).astype(int)
+    paths = {}
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    RocCurveDisplay.from_predictions(y_true, proba, ax=ax, name="modele")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="hasard")
+    ax.set_title("Courbe ROC")
+    ax.legend(loc="lower right")
+    paths["roc"] = out_dir / "roc_curve.png"
+    fig.savefig(paths["roc"], dpi=120, bbox_inches="tight")
     plt.close(fig)
-    return out_path
 
-
-def plot_pr(model, X_test, y_test, out_path="pr_curve.png") -> str:
-    """Generate and save Precision-Recall curve figure."""
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    PrecisionRecallDisplay.from_estimator(model, X_test, y_test, ax=ax)
-    fig.savefig(out_path, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(5, 5))
+    PrecisionRecallDisplay.from_predictions(y_true, proba, ax=ax, name="modele")
+    ax.axhline(y_true.mean(), linestyle="--", color="grey", label="hasard")
+    ax.set_title("Courbe precision-rappel")
+    ax.legend(loc="upper right")
+    paths["pr"] = out_dir / "pr_curve.png"
+    fig.savefig(paths["pr"], dpi=120, bbox_inches="tight")
     plt.close(fig)
-    return out_path
 
-
-def plot_confusion_matrix(model, X_test, y_test, out_path="confusion_matrix.png") -> str:
-    """Generate and save confusion matrix figure."""
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    ConfusionMatrixDisplay.from_estimator(model, X_test, y_test, ax=ax, cmap="Blues")
-    fig.savefig(out_path, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ConfusionMatrixDisplay.from_predictions(
+        y_true, pred, display_labels=["No", "Yes"], colorbar=False, ax=ax
+    )
+    ax.set_title(f"Matrice de confusion (seuil {threshold})")
+    paths["cm"] = out_dir / "confusion_matrix.png"
+    fig.savefig(paths["cm"], dpi=120, bbox_inches="tight")
     plt.close(fig)
-    return out_path
 
+    return paths
